@@ -23,6 +23,8 @@ type PillarState = {
   drift: number;        // 0.0 - 1.0
   lastChecked: string;  // ISO timestamp
   issues: string[];
+  spc_signal?: string;   // SPC detector signal (NORMAL / WATCH / WARNING)
+  trend?: string;        // short-term trend (stable / degrading / critical)
 };
 
 type AgentConfig = {
@@ -69,6 +71,70 @@ export default function pillarHelper(pi: ExtensionAPI) {
     aidration: { name: 'Aidration', titan: 'Krios', focus: 1.0, drift: 0.0, lastChecked: new Date().toISOString(), issues: [] },
     aimotions: { name: 'Aimotions', titan: 'Iapetos', focus: 1.0, drift: 0.0, lastChecked: new Date().toISOString(), issues: [] },
   };
+
+  // === TOOL: Detailed pillar status (L2 Observable) ===
+  pi.registerTool({
+    name: 'get_pillar_status',
+    label: 'Get Pillar Status',
+    description: `Detailed per-pillar breakdown for ${config.agent_name}`,
+    parameters: { detail: { type: 'boolean', description: 'Include SPC signals and repair history', default: true } },
+    async execute(_id, params: { detail?: boolean }) {
+      const snapshot = JSON.parse(JSON.stringify(pillars));
+      if (params.detail) {
+        // Add SPC signal levels (L3 Detecting) — basic CUSUM/EWMA indicators
+        for (const p of Object.values(snapshot) as PillarState[]) {
+          p['spc_signal'] = p.drift > 0.5 ? 'WARNING' : (p.drift > 0.25 ? 'WATCH' : 'NORMAL');
+          p['trend'] = p.focus > 0.9 ? 'stable' : (p.focus > 0.7 ? 'degrading' : 'critical');
+        }
+      }
+      return { content: [{ type: 'text', text: JSON.stringify(snapshot, null, 2) }] };
+    },
+  });
+
+  // === TOOL: Self-check + Reflexion loop (L4 Repairing) ===
+  pi.registerTool({
+    name: 'run_self_check',
+    label: 'Run Self-Check',
+    description: `Trigger introspection + Reflexion loop for ${config.agent_name}`,
+    async execute(_id) {
+      // 1. Compute current scores
+      const scores = computePillarScores([] as any[], config);
+      // 2. Log to FocusTracker (structured logging — L1)
+      await focusTracker.logEvent('self_check', { scores, agent: config.agent_name }, config.agent_name);
+      // 3. Check for drift
+      const directive = selectRepairDirective({
+        aiman: { ...scores.aiman, name: 'Aiman', titan: 'Hyperion' } as PillarState,
+        aigent: { ...scores.aigent, name: 'Aigent', titan: 'Koios' } as PillarState,
+        aidration: { ...scores.aidration, name: 'Aidration', titan: 'Krios' } as PillarState,
+        aimotions: { ...scores.aimotions, name: 'Aimotions', titan: 'Iapetos' } as PillarState,
+      });
+      // 4. Report
+      const message = `Self-check for ${config.agent_name}: ASI=${scores.aggregate.toFixed(2)}. ` +
+        (scores.aggregate < config.focus_threshold ? `Drift detected → repair: ${directive.action}` : 'Healthy — no repair needed');
+      await pi.sendMessage({ role: 'assistant', content: message });
+      // 5. Trigger repair if needed (via subagent)
+      if (scores.aggregate < config.focus_threshold) {
+        await invokePiSubagent(pi, config, directive);
+      }
+      return {
+        content: [{ type: 'text', text: message + '\nRepair directive: ' + directive.action + ' for ' + directive.pillars.join(', ') }],
+      };
+    },
+  });
+
+  // === TOOL: Repair log (L4 Repairing) ===
+  pi.registerTool({
+    name: 'get_repair_log',
+    label: 'Get Repair Log',
+    description: `History of triggered repairs for ${config.agent_name}`,
+    async execute(_id) {
+      // For now, read from SQLite events table where event_type = 'repair_triggered'
+      const rows = await focusTracker.getEventsByType('repair_triggered');
+      return {
+        content: [{ type: 'text', text: JSON.stringify({ repair_history: rows, count: rows.length }, null, 2) }],
+      };
+    },
+  });
 
   // === TOOL: Get current pillar states ===
   pi.registerTool({
@@ -163,8 +229,6 @@ export default function pillarHelper(pi: ExtensionAPI) {
         if (!existsSync(distDir)) {
           mkdirSync(distDir, { recursive: true });
         }
-
-        // Compile watchdog if needed (we assume it's already compiled)
 
         // Compile watchdog if needed (we assume it's already compiled)
         // Start the watchdog as a background process
@@ -288,15 +352,20 @@ class FocusTracker {
     pi_log(`[db] Updated ${pillar} state for ${agent_name}: focus=${state.focus.toFixed(2)}`);
   }
 
+  async getEventsByType(type: string): Promise<any[]> {
+    const stmt = this.db.prepare('SELECT * FROM events WHERE event_type = ? ORDER BY timestamp DESC LIMIT 100');
+    return stmt.all(type) as any[];
+  }
+
   async clearEvents() {
     this.db.exec('DELETE FROM events');
     pi_log('[db] Cleared all events');
   }
-}
+} // end FocusTracker
 
-// ============================================================
+// =============================================================
 // A2A Mesh Client — publishes events to PI_A2A mesh
-// ============================================================
+// =============================================================
 
 class A2AMeshClient {
   private topic: string;
