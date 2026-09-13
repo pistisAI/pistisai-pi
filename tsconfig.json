@@ -1,0 +1,16 @@
+{
+  "compilerOptions": {
+    "target": "es2020",
+    "module": "commonjs",
+    "strict": true,
+    "moduleResolution": "node",
+    "outDir": "./dist",
+    "rootDir": "./",
+    "skipLibCheck": true,
+    "noEmit": false
+  },
+  "include": [
+    "extensions/**/*.ts",
+    "extensions/**/*.d.ts"
+  ]
+}

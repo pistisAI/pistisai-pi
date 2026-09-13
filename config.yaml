@@ -1,10 +1,10 @@
 # Pi 4-Pillar Agent Helper — Ecosystem Config
 agent_name: pistisai
-agent_id: pistisai-agent-001  # Configurable reference, not hardcoded identity
+agent_id: pistisai-agent-001
 pillar_reference: 4-pillar     # Aiman / Aigent / Aidration / Aimotions
 monitor_target: agent-runtime  # Monitors the active agent in Hermes or Pi harness
 inference_backend: bionic      # Reuses LM Studio / Bionic on port 36093 (not new layer)
-mesh_topic: pistisai/focus     # A2A mesh topic for pillar events
+mesh_topic: pistisai/focus
 focus_threshold: 0.5           # Drift repair trigger
 metrics_port: 9090
 session_dir: ./pi-sessions

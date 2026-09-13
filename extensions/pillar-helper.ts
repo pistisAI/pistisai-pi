@@ -4,9 +4,15 @@
 // Maps agent activity to Aiman/Aigent/Aidration/Aimotions pillars, computes
 // a focus score, and triggers repair via pi subagent if drift detected.
 
-import type { ExtensionAPI } from '@oh-my-pi/pi-coding-agent';
 import { readFileSync, writeFileSync, existsSync, mkdirSync } from 'fs';
 import { join } from 'path';
+
+type ExtensionAPI = {
+  registerTool(tool: { name: string; label: string; description: string; parameters?: Record<string, any>; execute: (id: string, params: any) => Promise<any> }): void;
+  sendMessage(message: { role: string; content: string }): Promise<void>;
+  callTool(name: string, params?: any): Promise<any>;
+  log(message: string): void;
+};
 
 const CONFIG_PATH = join(process.cwd(), 'config.yaml');
 const DB_PATH = join(process.cwd(), 'focus_tracker.db');
@@ -78,7 +84,7 @@ export default function pillarHelper(pi: ExtensionAPI) {
     async execute(_id, params: { detail?: boolean }) {
       const snapshot = JSON.parse(JSON.stringify(pillars));
       if (!params.detail) {
-        for (const p of Object.values(snapshot)) p.issues = [];
+        for (const p of Object.values(snapshot) as PillarState[]) p.issues = [];
       }
       return { content: [{ type: 'text', text: JSON.stringify(snapshot, null, 2) }] };
     },
@@ -152,20 +158,6 @@ export default function pillarHelper(pi: ExtensionAPI) {
     },
   });
 
-  // === Background polling loop ===
-  pi.setInterval(async () => {
-    try {
-      // Trigger focus computation on each poll cycle
-      await focusTracker.getRecentEvents(60_000);
-      const result = await pi.callTool('compute_focus_score', {});
-      if (result?.content) {
-        pi.log('[pillar-helper] Poll cycle complete for ' + config.agent_name);
-      }
-    } catch (err) {
-      pi.log('[pillar-helper] Poll error: ' + String(err));
-      // Non-fatal; retry next cycle
-    }
-  }, 15_000); // every 15s
 }
 
 // ============================================================
