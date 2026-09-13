@@ -8,3 +8,4 @@ mesh_topic: zoid/focus
 focus_threshold: 0.5           # Drift repair trigger
 metrics_port: 9090
 session_dir: ./pi-sessions
+state_poll_interval_ms: 10000

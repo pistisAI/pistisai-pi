@@ -12,6 +12,14 @@ const CONFIG_PATH = join(process.cwd(), 'config.yaml');
 const STATE_FILE = join(process.cwd(), 'agent-state.json'); // Simulated Hermes state file
 const LOG_FILE = join(process.cwd(), 'watchdog.log');
 
+const BIONIC_BASE_URL = process.env.BIONIC_BASE_URL || 'http://127.0.0.1:36093/v1';
+const BIONIC_API_KEY = process.env.BIONIC_API_KEY || process.env.OPENAI_API_KEY || '';
+
+if (!BIONIC_API_KEY) {
+  console.error('[FATAL] BIONIC_API_KEY or OPENAI_API_KEY must be set in environment');
+  process.exit(1);
+}
+
 type Pillar = 'aiman' | 'aigent' | 'aidration' | 'aimotions';
 type PillarState = {
   name: string;
@@ -29,6 +37,8 @@ type AgentConfig = {
   mesh_topic: string;
   session_dir: string;
   state_poll_interval_ms: number;
+  inference_backend: string;
+  metrics_port: number;
 };
 
 function loadConfig(): AgentConfig {
@@ -40,6 +50,8 @@ function loadConfig(): AgentConfig {
     mesh_topic: 'pistisai/focus',
     session_dir: './pi-sessions',
     state_poll_interval_ms: 10_000, // 10s default
+    inference_backend: 'bionic',
+    metrics_port: 9090,
   };
 
   for (const line of configContent.split('\n')) {
@@ -52,6 +64,8 @@ function loadConfig(): AgentConfig {
       case 'mesh_topic': config.mesh_topic = val; break;
       case 'session_dir': config.session_dir = val; break;
       case 'state_poll_interval_ms': config.state_poll_interval_ms = parseInt(val); break;
+      case 'inference_backend': config.inference_backend = val; break;
+      case 'metrics_port': config.metrics_port = parseInt(val); break;
     }
   }
   return config;
@@ -166,11 +180,12 @@ Do NOT modify system prompts. Do NOT touch secrets.
 
   try {
     // Use pi's built-in subagent execution (equivalent to `pi --print`)
-    const result = execSync(`pi --provider openai --model gemma-4-E4B-it --print -- "${prompt.trim()}"`, {
+    // Use Bionic backend (LM Studio on port 36093)
+    const result = execSync(`pi --provider openai --model gemma-4-E4B-it --print -- "${prompt.trim().replace(/\n/g, '\n')}"`, {
       env: {
         ...process.env,
-        OPENAI_API_KEY: process.env.OPENAI_API_KEY || '65ETtJ6m5b-QClw581jma3UCTuQrd2JKO9b9O77zZMM',
-        AZURE_OPENAI_BASE_URL: process.env.AZURE_OPENAI_BASE_URL || 'http://127.0.0.1:36093/v1',
+        OPENAI_API_KEY: BIONIC_API_KEY,
+        AZURE_OPENAI_BASE_URL: BIONIC_BASE_URL,
       },
       maxBuffer: 1024 * 1024, // 1MB buffer
       encoding: 'utf8',

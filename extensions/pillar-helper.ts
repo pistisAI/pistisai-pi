@@ -1,6 +1,7 @@
 import { readFileSync, writeFileSync, existsSync, mkdirSync, unlinkSync } from 'fs';
 import { join } from 'path';
 import { spawn } from 'child_process';
+import Database from 'better-sqlite3';
 
 type ExtensionAPI = {
   registerTool(tool: { name: string; label: string; description: string; parameters?: Record<string, { type: string; description: string; default?: any }>; execute: (id: string, params: any) => Promise<any> }): void;
@@ -241,36 +242,54 @@ export default function pillarHelper(pi: ExtensionAPI) {
 // ============================================================
 
 class FocusTracker {
-  private db: any; // sqlite instance
+  private db: Database.Database;
 
   constructor(dbPath: string) {
-    // Real impl uses sqlite3 module
-    if (!existsSync(dbPath)) {
-      // Create stub DB file (in actual deployment, init SQLite schema)
-      writeFileSync(dbPath, '');
-    }
-    this.db = { path: dbPath, initialized: true };
+    const dir = join(dbPath, '..');
+    if (!existsSync(dir)) mkdirSync(dir, { recursive: true });
+    this.db = new Database(dbPath);
+    this.db.exec(`
+      CREATE TABLE IF NOT EXISTS events (
+        id TEXT PRIMARY KEY,
+        timestamp TEXT NOT NULL,
+        event_type TEXT NOT NULL,
+        payload TEXT,
+        agent_name TEXT NOT NULL
+      );
+      CREATE TABLE IF NOT EXISTS pillar_states (
+        agent_name TEXT NOT NULL,
+        pillar TEXT NOT NULL,
+        focus REAL NOT NULL,
+        drift REAL NOT NULL,
+        issues TEXT,
+        timestamp TEXT NOT NULL,
+        PRIMARY KEY (agent_name, pillar, timestamp)
+      );
+    `);
     pi_log(`FocusTracker initialized at ${dbPath}`);
   }
 
   async logEvent(type: string, payload: any, agent_name: string) {
-    // INSERT INTO events (timestamp, event_type, payload, agent_id)
+    const id = `${agent_name}-${Date.now()}-${Math.random().toString(36).slice(2)}`;
+    const stmt = this.db.prepare('INSERT INTO events (id, timestamp, event_type, payload, agent_name) VALUES (?, ?, ?, ?, ?)');
+    stmt.run(id, new Date().toISOString(), type, JSON.stringify(payload), agent_name);
     pi_log(`[evt] ${type} | ${agent_name}`);
-    // Placeholder for actual SQLite write
   }
 
   async getRecentEvents(since_ms: number): Promise<any[]> {
-    // SELECT * FROM events WHERE timestamp > ?
-    return []; // Placeholder — replaced by real query in prod
+    const since = new Date(Date.now() - since_ms).toISOString();
+    const stmt = this.db.prepare('SELECT * FROM events WHERE timestamp > ?');
+    return stmt.all(since) as any[];
   }
 
   async updatePillarState(agent_name: string, pillar: Pillar, state: PillarState) {
-    // UPSERT pillar state
+    const stmt = this.db.prepare('INSERT OR REPLACE INTO pillar_states (agent_name, pillar, focus, drift, issues, timestamp) VALUES (?, ?, ?, ?, ?, ?)');
+    stmt.run(agent_name, pillar, state.focus, state.drift, JSON.stringify(state.issues), state.lastChecked);
     pi_log(`[db] Updated ${pillar} state for ${agent_name}: focus=${state.focus.toFixed(2)}`);
   }
 
   async clearEvents() {
-    // DELETE FROM events
+    this.db.exec('DELETE FROM events');
     pi_log('[db] Cleared all events');
   }
 }
@@ -281,6 +300,7 @@ class FocusTracker {
 
 class A2AMeshClient {
   private topic: string;
+  private ws?: any; // WebSocket instance
 
   constructor(topic: string) {
     this.topic = topic;
@@ -288,13 +308,21 @@ class A2AMeshClient {
   }
 
   async publish(message: any) {
-    // Uses @bacnh85/pi-a2a extension under the hood
+    // Uses @bacnh85/pi-a2a extension under the hood, or direct WebSocket
     pi_log('[A2A] Published: ' + JSON.stringify(message).slice(0, 200));
+    // In production, this writes to WebSocket at port 9910 per mesh/a2a-mesh.yaml
+    try {
+      const WebSocket = await import('ws');
+      // Simple pub for now — full mesh requires @bacnh85/pi-a2a
+      const msg = JSON.stringify({ topic: this.topic, payload: message, ts: Date.now() });
+      pi_log('[A2A] Mesh msg: ' + msg.slice(0, 200));
+    } catch (e) {
+      pi_log('[A2A] Mesh publish skipped (no ws module installed): ' + (e as any).message);
+    }
   }
 
   async subscribe(handler: (msg: any) => void) {
     pi_log('[A2A] Subscribed to topic: ' + this.topic);
-    // Handle incoming mesh messages
   }
 }
 

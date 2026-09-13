@@ -9,10 +9,16 @@
     "start-watchdog": "node ./dist/src/watchdog.js"
   },
   "devDependencies": {
+    "@types/better-sqlite3": "^9.6.0",
     "@types/node": "^22.20.2",
+    "@types/ws": "^8.18.1",
     "typescript": "^5.9.3"
   },
   "engines": {
     "node": ">=18.0.0"
+  },
+  "dependencies": {
+    "better-sqlite3": "^13.0.3",
+    "ws": "^8.21.3"
   }
 }
