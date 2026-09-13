@@ -1,18 +1,15 @@
 "use strict";
-// pillar-helper.ts – Generic 4-pillar agent monitor/steer extension for Pi
-//
-// Works with any agent_name configured in config.yaml (default: "pistisai")
-// Maps agent activity to Aiman/Aigent/Aidration/Aimotions pillars, computes
-// a focus score, and triggers repair via pi subagent if drift detected.
 Object.defineProperty(exports, "__esModule", { value: true });
 exports.default = pillarHelper;
 const fs_1 = require("fs");
 const path_1 = require("path");
+const child_process_1 = require("child_process");
 const CONFIG_PATH = (0, path_1.join)(process.cwd(), 'config.yaml');
 const DB_PATH = (0, path_1.join)(process.cwd(), 'focus_tracker.db');
+const WATCHDOG_PID_FILE = (0, path_1.join)(process.cwd(), 'watchdog.pid');
+const WATCHDOG_SCRIPT_PATH = (0, path_1.join)(process.cwd(), 'dist', 'src', 'watchdog.js'); // compiled watchdog
 function loadConfig() {
     const configContent = (0, fs_1.readFileSync)(CONFIG_PATH, 'utf8');
-    // Simple YAML parse (real impl should use js-yaml)
     const config = {
         agent_name: 'pistisai',
         agent_id: 'pistisai-agent-001',
@@ -59,9 +56,7 @@ function pillarHelper(pi) {
         name: 'pillar_status',
         label: 'Pillar Status',
         description: `Show current 4-pillar focus state for agent: ${config.agent_name}`,
-        parameters: {
-            detail: { type: 'boolean', description: 'Include per-pillar issues', default: true },
-        },
+        parameters: { detail: { type: 'boolean', description: 'Include per-pillar issues', default: true } },
         async execute(_id, params) {
             const snapshot = JSON.parse(JSON.stringify(pillars));
             if (!params.detail) {
@@ -84,7 +79,6 @@ function pillarHelper(pi) {
                 pillars[p].drift = scores[p].drift;
                 pillars[p].issues = scores[p].issues;
                 pillars[p].lastChecked = new Date().toISOString();
-                // Persist
                 await focusTracker.updatePillarState(config.agent_name, p, pillars[p]);
             }
             // Publish state to mesh
@@ -133,6 +127,84 @@ function pillarHelper(pi) {
             return { content: [{ type: 'text', text: `${config.agent_name} focus state reset.` }] };
         },
     });
+    // === TOOL: Start watchdog ===
+    pi.registerTool({
+        name: 'watcher_start',
+        label: 'Start Watchdog',
+        description: 'Start the Pi watchdog (runs in background)',
+        async execute(_id) {
+            try {
+                const distDir = (0, path_1.join)(process.cwd(), 'dist');
+                if (!(0, fs_1.existsSync)(distDir)) {
+                    (0, fs_1.mkdirSync)(distDir, { recursive: true });
+                }
+                // Compile watchdog if needed (we assume it's already compiled)
+                // Compile watchdog if needed (we assume it's already compiled)
+                // Start the watchdog as a background process
+                const watchdogPath = WATCHDOG_SCRIPT_PATH;
+                if (!(0, fs_1.existsSync)(watchdogPath)) {
+                    throw new Error('Watchdog script not found at ' + watchdogPath);
+                }
+                // Start the watchdog in the background
+                const child = (0, child_process_1.spawn)('node', [watchdogPath], {
+                    detached: true,
+                    stdio: 'ignore',
+                });
+                // Save the PID to a file
+                const pid = child.pid;
+                (0, fs_1.writeFileSync)(WATCHDOG_PID_FILE, String(pid), 'utf8');
+                pi_log(`[watcher] Started watchdog (PID ${pid})`);
+                return { content: [{ type: 'text', text: `Watchdog started with PID ${pid}` }] };
+            }
+            catch (e) {
+                return { content: [{ type: 'text', text: `Failed to start watchdog: ${e.message}` }] };
+            }
+        },
+    });
+    // === TOOL: Stop watchdog ===
+    pi.registerTool({
+        name: 'watcher_stop',
+        label: 'Stop Watchdog',
+        description: `Stop the Pi watchdog (if running)`,
+        async execute(_id) {
+            if (!(0, fs_1.existsSync)(WATCHDOG_PID_FILE)) {
+                return { content: [{ type: 'text', text: 'Watchdog not running.' }] };
+            }
+            const pid = parseInt((0, fs_1.readFileSync)(WATCHDOG_PID_FILE, 'utf8'), 10);
+            try {
+                process.kill(pid, 'SIGTERM');
+                await new Promise(resolve => setTimeout(resolve, 1000));
+                (0, fs_1.unlinkSync)(WATCHDOG_PID_FILE);
+                pi_log(`[watcher] Stopped watchdog (PID ${pid})`);
+                return { content: [{ type: 'text', text: 'Watchdog stopped.' }] };
+            }
+            catch (e) {
+                return { content: [{ type: 'text', text: 'Failed to stop watchdog: ' + (e?.message || String(e)) }] };
+            }
+        },
+    });
+    // === TOOL: Watchdog status ===
+    pi.registerTool({
+        name: 'watcher_status',
+        label: 'Watchdog Status',
+        description: `Check if the Pi watchdog is currently running`,
+        async execute(_id) {
+            if ((0, fs_1.existsSync)(WATCHDOG_PID_FILE)) {
+                const pid = (0, fs_1.readFileSync)(WATCHDOG_PID_FILE, 'utf8').trim();
+                const status = await new Promise((resolve) => {
+                    const child = (0, child_process_1.spawn)('ps', ['-p', pid, '-o', 'status=']);
+                    let output = '';
+                    child.stdout.on('data', (data) => { output += data; });
+                    child.on('close', () => resolve(output.trim()));
+                });
+                return { content: [{ type: 'text', text: `Watchdog PID: ${pid}, Status: ${status}` }] };
+            }
+            else {
+                return { content: [{ type: 'text', text: 'Watchdog not running.' }] };
+            }
+        },
+    });
+    // Watchdog self-management tools register above
 }
 // ============================================================
 // Focus Tracker — persists events and pillar states to SQLite

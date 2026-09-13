@@ -4,8 +4,9 @@
   "description": "Pi 4-Pillar Agent Helper – monitor & steer any agent (Aiman/Aigent/Aidration/Aimotions)",
   "main": "extensions/pillar-helper.ts",
   "scripts": {
-    "build": "tsc --target es2020 --module commonjs --outDir dist",
-    "test": "echo \"Extension compiled successfully\" && node --check extensions/pillar-helper.ts 2>&1 || echo \"TypeScript check passed (compilation skipped)\"\n"
+    "build": "tsc",
+    "watch": "tsc --watch",
+    "start-watchdog": "node ./dist/src/watchdog.js"
   },
   "devDependencies": {
     "@types/node": "^22.20.2",

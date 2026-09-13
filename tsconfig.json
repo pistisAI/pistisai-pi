@@ -11,6 +11,8 @@
   },
   "include": [
     "extensions/**/*.ts",
-    "extensions/**/*.d.ts"
+    "extensions/**/*.d.ts",
+    "src/**/*.ts",
+    "src/**/*.d.ts"
   ]
 }

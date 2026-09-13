@@ -1,14 +1,9 @@
-// pillar-helper.ts – Generic 4-pillar agent monitor/steer extension for Pi
-//
-// Works with any agent_name configured in config.yaml (default: "pistisai")
-// Maps agent activity to Aiman/Aigent/Aidration/Aimotions pillars, computes
-// a focus score, and triggers repair via pi subagent if drift detected.
-
-import { readFileSync, writeFileSync, existsSync, mkdirSync } from 'fs';
+import { readFileSync, writeFileSync, existsSync, mkdirSync, unlinkSync } from 'fs';
 import { join } from 'path';
+import { spawn } from 'child_process';
 
 type ExtensionAPI = {
-  registerTool(tool: { name: string; label: string; description: string; parameters?: Record<string, any>; execute: (id: string, params: any) => Promise<any> }): void;
+  registerTool(tool: { name: string; label: string; description: string; parameters?: Record<string, { type: string; description: string; default?: any }>; execute: (id: string, params: any) => Promise<any> }): void;
   sendMessage(message: { role: string; content: string }): Promise<void>;
   callTool(name: string, params?: any): Promise<any>;
   log(message: string): void;
@@ -16,6 +11,8 @@ type ExtensionAPI = {
 
 const CONFIG_PATH = join(process.cwd(), 'config.yaml');
 const DB_PATH = join(process.cwd(), 'focus_tracker.db');
+const WATCHDOG_PID_FILE = join(process.cwd(), 'watchdog.pid');
+const WATCHDOG_SCRIPT_PATH = join(process.cwd(), 'dist', 'src', 'watchdog.js'); // compiled watchdog
 
 type Pillar = 'aiman' | 'aigent' | 'aidration' | 'aimotions';
 type PillarState = {
@@ -37,7 +34,6 @@ type AgentConfig = {
 
 function loadConfig(): AgentConfig {
   const configContent = readFileSync(CONFIG_PATH, 'utf8');
-  // Simple YAML parse (real impl should use js-yaml)
   const config: AgentConfig = {
     agent_name: 'pistisai',
     agent_id: 'pistisai-agent-001',
@@ -78,9 +74,7 @@ export default function pillarHelper(pi: ExtensionAPI) {
     name: 'pillar_status',
     label: 'Pillar Status',
     description: `Show current 4-pillar focus state for agent: ${config.agent_name}`,
-    parameters: {
-      detail: { type: 'boolean', description: 'Include per-pillar issues', default: true },
-    },
+    parameters: { detail: { type: 'boolean', description: 'Include per-pillar issues', default: true } },
     async execute(_id, params: { detail?: boolean }) {
       const snapshot = JSON.parse(JSON.stringify(pillars));
       if (!params.detail) {
@@ -103,7 +97,6 @@ export default function pillarHelper(pi: ExtensionAPI) {
         pillars[p].drift = scores[p].drift;
         pillars[p].issues = scores[p].issues;
         pillars[p].lastChecked = new Date().toISOString();
-        // Persist
         await focusTracker.updatePillarState(config.agent_name, p, pillars[p]);
       }
 
@@ -147,7 +140,7 @@ export default function pillarHelper(pi: ExtensionAPI) {
     label: 'Reset Focus',
     description: `Reset focus state for ${config.agent_name}.`,
     async execute(_id) {
-      for (const p of Object.values(pillars)) {
+      for (const p of Object.values(pillars) as PillarState[]) {
         p.focus = 1.0;
         p.drift = 0.0;
         p.issues = [];
@@ -158,6 +151,89 @@ export default function pillarHelper(pi: ExtensionAPI) {
     },
   });
 
+  // === TOOL: Start watchdog ===
+  pi.registerTool({
+    name: 'watcher_start',
+    label: 'Start Watchdog',
+    description: 'Start the Pi watchdog (runs in background)',
+    async execute(_id) {
+      try {
+        const distDir = join(process.cwd(), 'dist');
+        if (!existsSync(distDir)) {
+          mkdirSync(distDir, { recursive: true });
+        }
+
+        // Compile watchdog if needed (we assume it's already compiled)
+
+        // Compile watchdog if needed (we assume it's already compiled)
+        // Start the watchdog as a background process
+        const watchdogPath = WATCHDOG_SCRIPT_PATH;
+        if (!existsSync(watchdogPath)) {
+          throw new Error('Watchdog script not found at ' + watchdogPath);
+        }
+
+        // Start the watchdog in the background
+        const child = spawn('node', [watchdogPath], {
+          detached: true,
+          stdio: 'ignore',
+        });
+
+        // Save the PID to a file
+        const pid = child.pid;
+        writeFileSync(WATCHDOG_PID_FILE, String(pid), 'utf8');
+        pi_log(`[watcher] Started watchdog (PID ${pid})`);
+        return { content: [{ type: 'text', text: `Watchdog started with PID ${pid}` }] };
+      } catch (e: any) {
+        return { content: [{ type: 'text', text: `Failed to start watchdog: ${e.message}` }] };
+      }
+    },
+  });
+
+  // === TOOL: Stop watchdog ===
+  pi.registerTool({
+    name: 'watcher_stop',
+    label: 'Stop Watchdog',
+    description: `Stop the Pi watchdog (if running)`,
+    async execute(_id) {
+      if (!existsSync(WATCHDOG_PID_FILE)) {
+        return { content: [{ type: 'text', text: 'Watchdog not running.' }] };
+      }
+
+      const pid = parseInt(readFileSync(WATCHDOG_PID_FILE, 'utf8'), 10);
+      try {
+        process.kill(pid, 'SIGTERM');
+        await new Promise(resolve => setTimeout(resolve, 1000));
+        unlinkSync(WATCHDOG_PID_FILE);
+        pi_log(`[watcher] Stopped watchdog (PID ${pid})`);
+        return { content: [{ type: 'text', text: 'Watchdog stopped.' }] };
+      } catch (e: any) {
+        return { content: [{ type: 'text', text: 'Failed to stop watchdog: ' + (e?.message || String(e)) }] };
+      }
+    },
+  });
+
+  // === TOOL: Watchdog status ===
+  pi.registerTool({
+    name: 'watcher_status',
+    label: 'Watchdog Status',
+    description: `Check if the Pi watchdog is currently running`,
+    async execute(_id) {
+      if (existsSync(WATCHDOG_PID_FILE)) {
+        const pid = readFileSync(WATCHDOG_PID_FILE, 'utf8').trim();
+        const status = await new Promise<string>((resolve) => {
+          const child = spawn('ps', ['-p', pid, '-o', 'status=']);
+          let output = '';
+          child.stdout.on('data', (data) => { output += data; });
+          child.on('close', () => resolve(output.trim()));
+        });
+        return { content: [{ type: 'text', text: `Watchdog PID: ${pid}, Status: ${status}` }] };
+      } else {
+        return { content: [{ type: 'text', text: 'Watchdog not running.' }] };
+      }
+    },
+  });
+
+  // Watchdog self-management tools register above
 }
 
 // ============================================================
