@@ -1,0 +1,17 @@
+# A2A Mesh Configuration for Pi 4-Pillar Ecosystem
+# Peers communicate via WebSocket on port 9910 (default)
+mesh:
+  port: 9910
+  topic: pistisai/focus
+  retention: 1h
+peers:
+  - name: pi-pillar-helper
+    endpoint: ws://localhost:9910
+    role: observer
+    config: ./config.yaml
+  - name: pi-watcher
+    endpoint: ws://192.168.1.50:9911
+    role: watcher
+  - name: pi-orchestrator
+    endpoint: ws://192.168.1.51:9912
+    role: orchestrator

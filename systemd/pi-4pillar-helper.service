@@ -1,0 +1,21 @@
+[Unit]
+Description=Pi 4-Pillar Agent Helper (standalone ecosystem)
+After=network.target
+Wants=lmstudio.service
+
+[Service]
+Type=simple
+ExecStart=/home/linuxbrew/.linuxbrew/bin/pi --provider llamacpp --model google_gemma-4-E4B-it --mode rpc --extension /home/rightguy/pi-4pillar/extensions/pillar-helper.ts --session-dir /home/rightguy/pi-4pillar/sessions
+WorkingDirectory=/home/rightguy/pi-4pillar
+Restart=on-failure
+RestartSec=10
+Environment=PI_OFFLINE=0
+Environment=PI_CODING_AGENT_DIR=/home/rightguy/pi-4pillar/sessions
+Environment=PI_TELEMETRY=1
+User=rightguy
+Group=rightguy
+StandardOutput=journal
+StandardError=journal
+
+[Install]
+WantedBy=multi-user.target
