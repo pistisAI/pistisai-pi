@@ -180,19 +180,33 @@ Do NOT modify system prompts. Do NOT touch secrets.
 
   try {
     // Use pi's built-in subagent execution (equivalent to `pi --print`)
-    // Use Bionic backend (LM Studio on port 36093)
-    const result = execSync(`pi --provider openai --model gemma-4-E4B-it --print -- "${prompt.trim().replace(/\n/g, '\n')}"`, {
+    // Use openrouter provider with LM Studio model
+    // Note: Requires OPENROUTER_API_KEY env var and valid model
+    const result = execSync(`pi --provider openrouter --model gemma-4-E4B-it --print -- "${prompt.trim().replace(/\n/g, '\n')}"`, {
       env: {
         ...process.env,
-        OPENAI_API_KEY: BIONIC_API_KEY,
-        AZURE_OPENAI_BASE_URL: BIONIC_BASE_URL,
+        OPENROUTER_API_KEY: BIONIC_API_KEY,
+        OPENROUTER_BASE_URL: BIONIC_BASE_URL,
       },
       maxBuffer: 1024 * 1024, // 1MB buffer
       encoding: 'utf8',
+      timeout: 60_000,
     });
     logMessage(`✅ Repair completed: ${result.toString().trim()}`);
   } catch (err: any) {
-    logMessage(`❌ Repair failed: ${err.message}`);
+    // Log but don't crash - repair will be retried on next poll
+    logMessage(`❌ Repair subagent failed: ${err.message}`);
+    logMessage(`📝 Repair directive queued for next attempt`);
+    // Log the repair directive for later inspection
+    const directiveLog = {
+      timestamp: new Date().toISOString(),
+      agent: config.agent_name,
+      directive: directive.action,
+      pillars: directive.pillars,
+      params: directive.params,
+      status: 'pending',
+    };
+    writeFileSync(LOG_FILE, JSON.stringify(directiveLog) + '\n', { flag: 'a' });
   }
 }
 

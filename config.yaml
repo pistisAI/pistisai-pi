@@ -4,6 +4,8 @@ agent_id: zoid-agent-001
 pillar_reference: 4-pillar     # Aiman / Aigent / Aidration / Aimotions
 monitor_target: agent-runtime  # Monitors the active agent in Hermes or Pi harness
 inference_backend: bionic      # Reuses LM Studio / Bionic on port 36093 (not new layer)
+inference_port: 38313
+api_key: -RLr5H5xQQ4LVY10RKCUcJ03UWKDCKJ6zZ1rK6H1jrI
 mesh_topic: zoid/focus
 focus_threshold: 0.5           # Drift repair trigger
 metrics_port: 9090

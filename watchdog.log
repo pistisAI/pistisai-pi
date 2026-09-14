@@ -1,6 +1,0 @@
-[2026-09-13T03:15:03.425Z] 🚀 Starting Pi 4-Pillar Watchdog...
-[2026-09-13T03:15:03.426Z] 👀 Monitoring agent: zoid
-[2026-09-13T03:15:03.426Z] ⏱️  Poll interval: 10000ms
-[2026-09-13T03:15:03.426Z] 🎯 Focus threshold: 0.5
-[2026-09-13T03:15:03.426Z] 📊 Focus: 0.90 | Aiman: 0.80 | Aigent: 1.00 | Aidration: 0.80 | Aimotions: 1.00
-[2026-09-13T03:15:04.918Z] 🛑 Watchdog stopped by signal
