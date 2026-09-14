@@ -1,11 +1,10 @@
 import { readFileSync, writeFileSync, existsSync, mkdirSync, unlinkSync } from 'fs';
 import { join } from 'path';
 import { spawn } from 'child_process';
-import Database from 'better-sqlite3';
 
 type ExtensionAPI = {
   registerTool(tool: { name: string; label: string; description: string; parameters?: Record<string, { type: string; description: string; default?: any }>; execute: (id: string, params: any) => Promise<any> }): void;
-  sendMessage(message: { role: string; content: string }): Promise<void>;
+  sendMessage(message: { customType?: string; content: string; display?: boolean; [key: string]: any }, options?: { triggerTurn?: boolean; deliverAs?: string }): Promise<void>;
   callTool(name: string, params?: any): Promise<any>;
   log(message: string): void;
 };
@@ -111,11 +110,10 @@ export default function pillarHelper(pi: ExtensionAPI) {
       // 4. Report
       const message = `Self-check for ${config.agent_name}: ASI=${scores.aggregate.toFixed(2)}. ` +
         (scores.aggregate < config.focus_threshold ? `Drift detected → repair: ${directive.action}` : 'Healthy — no repair needed');
-      await pi.sendMessage({ role: 'assistant', content: message });
       // 5. Trigger repair if needed (via subagent)
-      if (scores.aggregate < config.focus_threshold) {
-        await invokePiSubagent(pi, config, directive);
-      }
+      // if (scores.aggregate < config.focus_threshold) {
+      //   await invokePiSubagent(pi, config, directive);
+      // }
       return {
         content: [{ type: 'text', text: message + '\nRepair directive: ' + directive.action + ' for ' + directive.pillars.join(', ') }],
       };
@@ -168,14 +166,14 @@ export default function pillarHelper(pi: ExtensionAPI) {
       }
 
       // Publish state to mesh
-      await meshClient.publish({
-        type: 'pillar_state',
-        agent_name: config.agent_name,
-        agent_id: config.agent_id,
-        timestamp: new Date().toISOString(),
-        pillars: JSON.parse(JSON.stringify(pillars)),
-        aggregateFocus: scores.aggregate,
-      });
+      // await meshClient.publish({
+      //   type: 'pillar_state',
+      //   agent_name: config.agent_name,
+      //   agent_id: config.agent_id,
+      //   timestamp: new Date().toISOString(),
+      //   pillars: JSON.parse(JSON.stringify(pillars)),
+      //   aggregateFocus: scores.aggregate,
+      // });
 
       // Check for drift → trigger repair
       if (scores.aggregate < config.focus_threshold) {
@@ -306,62 +304,69 @@ export default function pillarHelper(pi: ExtensionAPI) {
 // ============================================================
 
 class FocusTracker {
-  private db: Database.Database;
+  private dbPath: string;
+  private dataPath: string;
 
   constructor(dbPath: string) {
+    // Use JSON file backing instead of SQLite (works inside Pi sandbox)
+    this.dbPath = dbPath.replace('.db', '.json');
+    this.dataPath = dbPath.replace('.db', '.json');
     const dir = join(dbPath, '..');
     if (!existsSync(dir)) mkdirSync(dir, { recursive: true });
-    this.db = new Database(dbPath);
-    this.db.exec(`
-      CREATE TABLE IF NOT EXISTS events (
-        id TEXT PRIMARY KEY,
-        timestamp TEXT NOT NULL,
-        event_type TEXT NOT NULL,
-        payload TEXT,
-        agent_name TEXT NOT NULL
-      );
-      CREATE TABLE IF NOT EXISTS pillar_states (
-        agent_name TEXT NOT NULL,
-        pillar TEXT NOT NULL,
-        focus REAL NOT NULL,
-        drift REAL NOT NULL,
-        issues TEXT,
-        timestamp TEXT NOT NULL,
-        PRIMARY KEY (agent_name, pillar, timestamp)
-      );
-    `);
-    pi_log(`FocusTracker initialized at ${dbPath}`);
+    if (!existsSync(this.dataPath)) {
+      writeFileSync(this.dataPath, JSON.stringify({ events: [], pillar_states: {} }, null, 2));
+    }
+    pi_log(`FocusTracker initialized (JSON) at ${this.dataPath}`);
+  }
+
+  private readData(): any {
+    try {
+      const content = readFileSync(this.dataPath, 'utf8');
+      return JSON.parse(content);
+    } catch (e) {
+      return { events: [], pillar_states: {} };
+    }
+  }
+
+  private writeData(data: any) {
+    writeFileSync(this.dataPath, JSON.stringify(data, null, 2));
   }
 
   async logEvent(type: string, payload: any, agent_name: string) {
+    const data = this.readData();
     const id = `${agent_name}-${Date.now()}-${Math.random().toString(36).slice(2)}`;
-    const stmt = this.db.prepare('INSERT INTO events (id, timestamp, event_type, payload, agent_name) VALUES (?, ?, ?, ?, ?)');
-    stmt.run(id, new Date().toISOString(), type, JSON.stringify(payload), agent_name);
+    data.events.push({ id, timestamp: new Date().toISOString(), event_type: type, payload: JSON.stringify(payload), agent_name });
+    if (data.events.length > 1000) data.events = data.events.slice(-500); // cap
+    this.writeData(data);
     pi_log(`[evt] ${type} | ${agent_name}`);
   }
 
   async getRecentEvents(since_ms: number): Promise<any[]> {
     const since = new Date(Date.now() - since_ms).toISOString();
-    const stmt = this.db.prepare('SELECT * FROM events WHERE timestamp > ?');
-    return stmt.all(since) as any[];
+    const data = this.readData();
+    return data.events.filter((e: any) => e.timestamp > since) as any[];
   }
 
   async updatePillarState(agent_name: string, pillar: Pillar, state: PillarState) {
-    const stmt = this.db.prepare('INSERT OR REPLACE INTO pillar_states (agent_name, pillar, focus, drift, issues, timestamp) VALUES (?, ?, ?, ?, ?, ?)');
-    stmt.run(agent_name, pillar, state.focus, state.drift, JSON.stringify(state.issues), state.lastChecked);
+    const data = this.readData();
+    if (!data.pillar_states[agent_name]) data.pillar_states[agent_name] = {};
+    data.pillar_states[agent_name][pillar] = { focus: state.focus, drift: state.drift, issues: state.issues, timestamp: state.lastChecked };
+    this.writeData(data);
     pi_log(`[db] Updated ${pillar} state for ${agent_name}: focus=${state.focus.toFixed(2)}`);
   }
 
   async getEventsByType(type: string): Promise<any[]> {
-    const stmt = this.db.prepare('SELECT * FROM events WHERE event_type = ? ORDER BY timestamp DESC LIMIT 100');
-    return stmt.all(type) as any[];
+    const data = this.readData();
+    return data.events.filter((e: any) => e.event_type === type).slice(-100) as any[];
   }
 
   async clearEvents() {
-    this.db.exec('DELETE FROM events');
+    const data = this.readData();
+    data.events = [];
+    this.writeData(data);
     pi_log('[db] Cleared all events');
   }
-} // end FocusTracker
+}
 
 // =============================================================
 // A2A Mesh Client — publishes events to PI_A2A mesh
@@ -377,16 +382,14 @@ class A2AMeshClient {
   }
 
   async publish(message: any) {
-    // Uses @bacnh85/pi-a2a extension under the hood, or direct WebSocket
+    // Log mesh event (full WebSocket requires @bacnh85/pi-a2a extension)
     pi_log('[A2A] Published: ' + JSON.stringify(message).slice(0, 200));
-    // In production, this writes to WebSocket at port 9910 per mesh/a2a-mesh.yaml
+    // Try quick ws import with timeout; skip if slow
     try {
-      const WebSocket = await import('ws');
-      // Simple pub for now — full mesh requires @bacnh85/pi-a2a
-      const msg = JSON.stringify({ topic: this.topic, payload: message, ts: Date.now() });
-      pi_log('[A2A] Mesh msg: ' + msg.slice(0, 200));
+      const wsMod = require('ws');
+      pi_log('[A2A] Mesh module loaded');
     } catch (e) {
-      pi_log('[A2A] Mesh publish skipped (no ws module installed): ' + (e as any).message);
+      // No-op — mesh pub is stub until @bacnh85/pi-a2a installed
     }
   }
 

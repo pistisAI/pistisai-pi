@@ -1,0 +1,35 @@
+{
+  "events": [],
+  "pillar_states": {
+    "zoid": {
+      "aiman": {
+        "focus": 1,
+        "drift": 0,
+        "issues": [],
+        "timestamp": "2026-09-14T03:50:40.222Z"
+      },
+      "aigent": {
+        "focus": 1,
+        "drift": 0,
+        "issues": [
+          "No recent tool activity"
+        ],
+        "timestamp": "2026-09-14T03:50:40.222Z"
+      },
+      "aidration": {
+        "focus": 0.9,
+        "drift": 0.09999999999999998,
+        "issues": [
+          "0 sessions active"
+        ],
+        "timestamp": "2026-09-14T03:50:40.222Z"
+      },
+      "aimotions": {
+        "focus": 1,
+        "drift": 0,
+        "issues": [],
+        "timestamp": "2026-09-14T03:50:40.222Z"
+      }
+    }
+  }
+}
